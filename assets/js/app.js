@@ -652,8 +652,11 @@
     { img: 'r07', t: '二层看台 · 视野最好的位置', m: [['功能', '看台餐饮 · VR 娱乐'], ['规模', '二层 132 座 · VR 区约 430 ㎡']], h: '18 组阶梯卡座，正对舞台与巨幕' },
   ];
   const Gallery = (() => {
-    const box = document.getElementById('gallery');
-    if (!box) return { run: async () => {}, hide() {} };
+    // 容器由脚本生成，不依赖页面
+    document.querySelectorAll('#gallery').forEach(e => e.remove());
+    const box = document.createElement('div'); box.id = 'gallery';
+    box.innerHTML = '<div class="g-img"><img alt=""></div><div class="g-img"><img alt=""></div><div class="g-shade"></div><div class="g-txt"><div class="g-no"></div><div class="g-t"></div><div class="g-meta"></div><div class="g-hl"></div></div>';
+    stage.insertBefore(box, document.getElementById('chapterCard'));
     const layers = [...box.querySelectorAll('.g-img')], txt = box.querySelector('.g-txt');
     const SEC = +(Q.get('gsec') || 8);   // 每张停留秒数
     const src = d => `assets/img/${d.img}.jpg`;
@@ -765,7 +768,7 @@
   ui.cap.onclick = () => { document.body.classList.toggle('cap'); ui.cap.classList.toggle('on'); };
   // 全屏：安卓手机进入全屏后顺便锁定横屏；苹果手机的浏览器不支持网页全屏，给出替代办法
   let toastT;
-  function toast(msg) { const e = document.getElementById('toast'); e.textContent = msg; e.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => e.classList.remove('on'), 9000); }
+  function toast(msg) { let e = document.getElementById('toast'); if (!e) { e = document.createElement('div'); e.id = 'toast'; document.body.appendChild(e); } e.textContent = msg; e.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => e.classList.remove('on'), 9000); }
   const NOFULL = '这个浏览器不支持网页全屏。苹果手机：用 Safari 打开，点底部“分享”→“添加到主屏幕”，从桌面图标进入就是全屏；在微信里请先点右上角“…”选“在浏览器打开”。';
   function toggleFull(quiet) {
     const d = document, el = d.documentElement;
@@ -787,12 +790,20 @@
   document.getElementById('sManual').onclick = () => start('manual');
   document.getElementById('sAuto').onclick = () => start('auto');
   // 结束后的按钮组：资料下载（展开“视频 / 文档”）和重新讲解
-  const endbar = document.getElementById('endbar'), dlw = document.getElementById('dlw');
-  document.getElementById('bDl').onclick = e => { e.stopPropagation(); dlw.classList.toggle('open'); };
-  document.getElementById('bRe').onclick = () => next();
+  // 这组按钮由脚本自己生成，不依赖页面里有没有对应的元素（手机可能缓存着旧页面，新旧混用时也不能出错）
+  document.querySelectorAll('#bDl, #dl, #endbar').forEach(e => e.remove());
+  const endbar = document.createElement('div'); endbar.id = 'endbar';
+  endbar.innerHTML = `<div class="dlw" id="dlw"><div class="dl-menu">
+      <a id="dlVideo" href="downloads/video-male-hd.mp4" download="玖影喜面-商业汇报-男声高清.mp4" target="_blank">视频<small>男声 · 1080p 高清</small></a>
+      <a id="dlPdf" href="downloads/report-a4.pdf" download="玖影喜面-商业汇报-A4横版.pdf" target="_blank">文档<small>PDF · A4 横版 23 页</small></a>
+    </div><button id="bDl">资料下载</button></div><button id="bRe">重新讲解 ↺</button>`;
+  document.body.appendChild(endbar);
+  const dlw = endbar.querySelector('.dlw');
+  endbar.querySelector('#bDl').onclick = e => { e.stopPropagation(); dlw.classList.toggle('open'); };
+  endbar.querySelector('#bRe').onclick = () => next();
   addEventListener('click', e => { if (!dlw.contains(e.target)) dlw.classList.remove('open'); });
   // 高清视频约 93MB，超过 Cloudflare 单文件 25MB 的上限，所以网页版统一从 GitHub 那份下载
-  if (HTTP && !/github\.io$/.test(location.hostname)) document.getElementById('dlVideo').href = 'https://zanboo.github.io/jiuying-ximian/downloads/video-male-hd.mp4';
+  if (HTTP && !/github\.io$/.test(location.hostname)) endbar.querySelector('#dlVideo').href = 'https://zanboo.github.io/jiuying-ximian/downloads/video-male-hd.mp4';
   addEventListener('keydown', e => {
     if (e.code === 'Escape') { dlw.classList.remove('open'); return; }
     if (['Space', 'ArrowRight', 'PageDown', 'Enter'].includes(e.code)) { e.preventDefault(); next(); }
