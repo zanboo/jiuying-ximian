@@ -16,6 +16,11 @@
   const setKey = () => voice === 'off' ? (SETS.m ? 'm' : 'f') : voice;
   const setOf = () => SETS[setKey()] || {};
   const Q = new URLSearchParams(location.search);
+  // 网页版（http/https）：手机走流量时浏览器不会按 preload 提前缓冲声音，所以改成用 fetch 把整段声音下载到内存再播放
+  const HTTP = /^http/.test(location.protocol);
+  const blobs = {};
+  const getBlob = (key, url) => blobs[key] || (blobs[key] = fetch(url).then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+    .then(b => URL.createObjectURL(b)).catch(() => { delete blobs[key]; return null; }));
   // 苹果手机上网页不能改音量（volume 只读），用它来识别
   const VOL_OK = (() => { if (Q.has('wa')) return false; try { const a = new Audio(); a.volume = .5; return a.volume === .5; } catch (e) { return true; } })();
   const PRINT = Q.has('print');
@@ -209,7 +214,7 @@
   }
 
   // ---------- 播放状态 ----------
-  let cur = -1, mode = 'manual', paused = false, tok = null, waitingNext = -1, started = false;
+  let cur = -1, mode = 'auto', paused = false, tok = null, waitingNext = -1, started = false;
   let audio = new Audio();
   const ui = {
     play: document.getElementById('bPlay'), auto: document.getElementById('bAuto'), cap: document.getElementById('bCap'),
@@ -234,9 +239,13 @@
     if (!(level in LV)) level = 'std';
     let ducked = false, bgm = null, amb = null, bgmKey = '', ambKey = '', curCi = -1, curPage = '';
     const live = new Set(), pending = [], pool = {}, loopers = {};
-    const mk = file => { const a = new Audio(); a.preload = 'none'; a.src = 'assets/audio/' + file; all.push(a); return a; };
+    const mk = file => { const a = new Audio(); a.preload = 'none'; a._url = 'assets/audio/' + file; a.src = a._url; all.push(a); return a; };
     // 预热：把某个声音提前下载好（苹果手机不支持预加载，播放时再载）
-    const heat = a => { if (a._hot) return; a._hot = true; a.preload = 'auto'; if (VOL_OK && a.readyState === 0 && a.paused) { try { a.load(); } catch (e) {} } };
+    const heat = a => {
+      if (a._hot) return; a._hot = true;
+      if (HTTP) { getBlob('s:' + a._url, a._url).then(b => { if (b && !a._live && a.paused) a.src = b; }); return; }   // 下载到内存，播放时零等待
+      a.preload = 'auto'; if (a.readyState === 0 && a.paused) { try { a.load(); } catch (e) {} }
+    };
     function warm(ci) {
       [ci, ci + 1].forEach(c => { const ch = N.chapters[c], k = ch && CH_BGM[ch.id]; if (k && BG[k]) L(BG[k], 'b' + k).els.forEach(heat); });
       ['curtain', 'projector', 'chapter'].forEach(k => pool[k] && heat(pool[k]));
@@ -377,8 +386,9 @@
     (firstPageOnly ? [flat[0]] : flat.filter(f => f.ci >= ci && f.ci <= ci + 1)).forEach(f => f.segs.forEach((_, n) => {
       const id = `${f.id}-${n + 1}`; if (!set[id] || warmed[k + id]) return; warmed[k + id] = 1;
       const url = 'assets/audio/' + set[id].file;
-      if (narr) { if (/^http/.test(location.protocol)) fetch(url).catch(() => {}); return; }
-      const a = new Audio(); a.preload = 'auto'; a.src = url; clips[k + id] = a;
+      if (HTTP) { getBlob(k + id, url); return; }
+      if (narr) return;
+      const a = new Audio(); a.preload = 'auto'; a.src = url; a._src = url; clips[k + id] = a;
     }));
     if (!firstPageOnly) Sound.warm(ci);   // 背景乐等可以点开始之后再下载，不和封面抢带宽
   }
@@ -389,26 +399,38 @@
     try { const p = narr.play(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
   }
   const estDur = text => Math.max(2200, text.replace(/\s/g, '').length / 4.2 * 1000);
-  function playSeg(id, text, t) {
+  function playSeg(id, text, t, onStart) {
+    let began = false;
+    const begin = () => { if (began || t.dead) return; began = true; onStart && onStart(); };
     const a = setOf()[id], ck = setKey() + id;
-    if (!a) return sleep(estDur(text), t);
+    if (!a) { begin(); return sleep(estDur(text), t); }
     return new Promise((res, rej) => {
-      const url = 'assets/audio/' + a.file;
-      const el = narr || clips[ck] || (clips[ck] = new Audio(url));
-      if (narr) narr.src = url;
-      audio = el; el._live = true; el.muted = voice === 'off';
-      if (!narr) { try { el.currentTime = 0; } catch (e) {} }
-      let over = false, rolling = false;
-      const finish = ok => { if (over) return; over = true; clearInterval(chk); el.removeEventListener('ended', done); el.removeEventListener('error', fail); el.removeEventListener('playing', roll); ok ? res() : rej(ABORT); };
+      const url = 'assets/audio/' + a.file, dur = (a.dur || 3) * 1000;
+      let el = null, over = false, rolling = false;
+      const finish = ok => {
+        if (over) return; over = true; clearInterval(chk);
+        if (el) { el.removeEventListener('ended', done); el.removeEventListener('error', silent); el.removeEventListener('playing', roll); }
+        ok ? res() : rej(ABORT);
+      };
       const done = () => finish(true);
-      const fail = () => { if (!over && !rolling) { rolling = true; sleep((a.dur || 3) * 1000, t).then(done, () => finish(false)); } };
-      const chk = setInterval(() => { if (t.dead) { el.pause(); finish(false); } }, 80);
-      // 保护：声音真正响起后，按时长 + 1.5 秒兜底继续（万一浏览器没有发出播放结束事件）；
-      // 网络太慢、20 秒还没响起来，就按这段的时长静音走完，不让演示卡住
-      const roll = () => { if (rolling) return; rolling = true; sleep((a.dur || 3) * 1000 + 1500, t).then(() => { if (!over) { el.pause(); done(); } }, () => {}); };
-      el.addEventListener('ended', done); el.addEventListener('error', fail); el.addEventListener('playing', roll);
-      sleep(20000, t).then(() => { if (!rolling && !over) { el.pause(); fail(); } }, () => {});
-      if (!paused) el.play().catch(fail);
+      // 没有声音可放（加载失败、被浏览器拦截、等太久）：画面照常走，按这段的时长静音走完
+      const silent = () => { if (over || rolling) return; rolling = true; begin(); if (el) el.pause(); sleep(dur, t).then(done, () => finish(false)); };
+      // 声音真正响起：这时才让画面动；再按时长 + 1.5 秒兜底（万一浏览器没有发出播放结束事件）
+      const roll = () => { if (over || rolling) return; rolling = true; begin(); sleep(dur + 1500, t).then(() => { if (!over) { el.pause(); done(); } }, () => {}); };
+      const chk = setInterval(() => { if (t.dead) { if (el) el.pause(); finish(false); } }, 80);
+      const go = src => {
+        if (over) return;
+        el = narr || clips[ck] || (clips[ck] = new Audio());
+        if (narr || el._src !== src) { el.src = src; el._src = src; }
+        audio = el; el._live = true; el.muted = voice === 'off';
+        if (!narr) { try { el.currentTime = 0; } catch (e) {} }
+        el.addEventListener('ended', done); el.addEventListener('error', silent); el.addEventListener('playing', roll);
+        sleep(10000, t).then(() => { if (!rolling) silent(); }, () => {});
+        if (!paused) { const pr = el.play(); if (pr && pr.catch) pr.catch(e => { if (!e || e.name !== 'AbortError') silent(); }); }
+      };
+      // 网页版：等这段声音下载到内存再放（最多等 15 秒，画面跟着等，保持同步）
+      if (HTTP) Promise.race([getBlob(ck, url), sleep(15000, t).then(() => null, () => null)]).then(b => go(b || url));
+      else go(url);
     });
   }
   function setCaption(text) {
@@ -472,9 +494,7 @@
         await sleep(700, t);
         Sound.duck(true);
         for (let s = 0; s < f.segs.length; s++) {
-          reveal(f.el, s + 1);
-          setCaption(f.segs[s]);
-          await playSeg(`${f.id}-${s + 1}`, f.segs[s], t);
+          await playSeg(`${f.id}-${s + 1}`, f.segs[s], t, () => { reveal(f.el, s + 1); setCaption(f.segs[s]); });
           await sleep(380, t);
         }
         setCaption('');
@@ -528,7 +548,7 @@
   function hideHint() { waitingNext = -1; ui.hint.style.display = 'none'; }
 
   function next() {
-    if (!started) return start('manual');
+    if (!started) return start('auto');   // 默认自动讲解
     if (waitingNext === -2) return playFrom(0);
     if (waitingNext >= 0) return playFrom(waitingNext);
     // 播放中：跳到下一章开头
@@ -557,6 +577,7 @@
   function start(m) {
     if (!gateOpen || started || starting) return;
     starting = true;
+    if (HTTP && matchMedia('(hover: none)').matches) toggleFull(true);   // 手机、平板：开始时顺便进入全屏并横屏（不支持的设备不打扰）
     const run = () => {
       Sound.setLevel(Sound.level);
       started = true;
@@ -594,7 +615,19 @@
   ui.play.onclick = togglePause;
   ui.auto.onclick = () => setMode(mode === 'auto' ? 'manual' : 'auto');
   ui.cap.onclick = () => { document.body.classList.toggle('cap'); ui.cap.classList.toggle('on'); };
-  document.getElementById('bFull').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  // 全屏：安卓手机进入全屏后顺便锁定横屏；苹果手机的浏览器不支持网页全屏，给出替代办法
+  let toastT;
+  function toast(msg) { const e = document.getElementById('toast'); e.textContent = msg; e.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => e.classList.remove('on'), 9000); }
+  const NOFULL = '这个浏览器不支持网页全屏。苹果手机：用 Safari 打开，点底部“分享”→“添加到主屏幕”，从桌面图标进入就是全屏；在微信里请先点右上角“…”选“在浏览器打开”。';
+  function toggleFull(quiet) {
+    const d = document, el = d.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen, exit = d.exitFullscreen || d.webkitExitFullscreen;
+    if (d.fullscreenElement || d.webkitFullscreenElement) { if (quiet !== true && exit) exit.call(d); return; }
+    if (!req) { if (quiet !== true && !navigator.standalone) toast(NOFULL); return; }
+    const lock = () => { try { const o = screen.orientation; if (o && o.lock) { const r = o.lock('landscape'); r && r.catch && r.catch(() => {}); } } catch (e) {} };
+    try { const r = req.call(el); r && r.then ? r.then(lock, () => { if (quiet !== true) toast(NOFULL); }) : lock(); } catch (e) { if (quiet !== true) toast(NOFULL); }
+  }
+  document.getElementById('bFull').onclick = () => toggleFull();
   ui.hint.onclick = next;
   const cycleVoice = () => { const order = ['m', 'f', 'off'].filter(v => v === 'off' || SETS[v]); setVoice(order[(order.indexOf(voice) + 1) % order.length]); };
   document.getElementById('bVoice').onclick = cycleVoice;
@@ -635,14 +668,16 @@
   function loadGate() {
     const ld = document.getElementById('ld'), btns = document.querySelector('#start .btns');
     const imgs = [...flat[0].el.querySelectorAll('img')];
-    const ess = VOL_OK ? [clips[setKey() + flat[0].id + '-1']].filter(Boolean) : [];   // 只等封面图和第一句旁白
-    const total = imgs.length + ess.length; let done = 0, opened = false;
+    const first = setOf()[flat[0].id + '-1'], el0 = clips[setKey() + flat[0].id + '-1'];
+    const waits = imgs.map(im => new Promise(r => { if (im.complete) r(); else { im.addEventListener('load', r, { once: true }); im.addEventListener('error', r, { once: true }); } }));
+    if (first && HTTP) waits.push(getBlob(setKey() + flat[0].id + '-1', 'assets/audio/' + first.file));
+    else if (el0) waits.push(new Promise(r => { if (el0.readyState >= 3) r(); else ['canplay', 'loadeddata', 'error'].forEach(ev => el0.addEventListener(ev, r, { once: true })); }));
+    const total = waits.length; let done = 0, opened = false;
     const open = () => { if (opened) return; opened = true; gateOpen = true; btns.classList.remove('wait'); if (ld) ld.textContent = ''; warmAudio(0); warmPages(0); };
     const inc = () => { done++; if (ld && !opened) ld.textContent = `正在加载 ${Math.round(100 * done / total)}%`; if (done >= total) open(); };
     btns.classList.add('wait');
     if (ld) ld.textContent = '正在加载 0%';
-    imgs.forEach(im => { if (im.complete) inc(); else { im.addEventListener('load', inc, { once: true }); im.addEventListener('error', inc, { once: true }); } });
-    ess.forEach(a => { if (a.readyState >= 3) inc(); else { let hit = false; const h = () => { if (!hit) { hit = true; inc(); } }; a.addEventListener('canplay', h); a.addEventListener('loadeddata', h); a.addEventListener('error', h); } });
+    waits.forEach(w => w.then(inc, inc));
     if (!total) open();
     setTimeout(open, 10000);   // 网络很慢时也不把人挡在外面：最多等 10 秒，之后边播边载
   }
@@ -696,5 +731,5 @@
     window.__READY__ = true;
   }
   boot();
-  window.APP = { playFrom, flat, next, prev, setVoice, start, Sound };
+  window.APP = { playFrom, flat, next, prev, setVoice, start, Sound, toggleFull };
 })();
