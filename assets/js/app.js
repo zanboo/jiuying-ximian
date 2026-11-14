@@ -28,8 +28,8 @@
   let wctx = null, narrGain = null, silentEl = null;
   const bufP = {}, bufs = {};
   function wa() { if (!wctx) { wctx = new AC(); narrGain = wctx.createGain(); narrGain.connect(wctx.destination); } return wctx; }
-  function getBuf(url) {
-    return bufP[url] || (bufP[url] = fetch(url).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+  function getBuf(url, pri) {   // pri：旁白用 high，背景乐和音效用 low，慢网下先保证旁白
+    return bufP[url] || (bufP[url] = fetch(url, { priority: pri || 'low' }).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
       .then(ab => new Promise((res, rej) => wa().decodeAudioData(ab, res, rej)))
       .then(b => (bufs[url] = b)).catch(() => { delete bufP[url]; return null; }));
   }
@@ -460,7 +460,7 @@
     (firstPageOnly ? [flat[0]] : flat.filter(f => f.ci >= ci && f.ci <= ci + 1)).forEach(f => f.segs.forEach((_, n) => {
       const id = `${f.id}-${n + 1}`; if (!set[id]) return;
       const url = 'assets/audio/' + set[id].file;
-      if (WAOK) { getBuf(url); return; }
+      if (WAOK) { getBuf(url, 'high'); return; }
       if (warmed[k + id]) return; warmed[k + id] = 1;
       if (HTTP) { getBlob(k + id, url); return; }
       if (narr) return;
@@ -487,7 +487,7 @@
       const chk = setInterval(() => { if (t.dead) finish(false); }, 80);
       // 这段声音拿不到（网络失败或等了 15 秒）：画面和字幕照常走，按时长静音走完
       const silent = () => { if (over || rolling) return; rolling = true; begin(); sleep(dur, t).then(() => finish(true), () => finish(false)); };
-      Promise.race([getBuf(url), sleep(15000, t).then(() => null, () => null)]).then(buf => {
+      Promise.race([getBuf(url, 'high'), sleep(15000, t).then(() => null, () => null)]).then(buf => {
         if (over || t.dead) return;
         if (!buf || !wctx) return silent();
         rolling = true;
@@ -764,7 +764,7 @@
     const imgs = [...flat[0].el.querySelectorAll('img')];
     const first = setOf()[flat[0].id + '-1'], el0 = clips[setKey() + flat[0].id + '-1'];
     const waits = imgs.map(im => new Promise(r => { if (im.complete) r(); else { im.addEventListener('load', r, { once: true }); im.addEventListener('error', r, { once: true }); } }));
-    if (first && WAOK) waits.push(getBuf('assets/audio/' + first.file));
+    if (first && WAOK) waits.push(getBuf('assets/audio/' + first.file, 'high'));
     else if (first && HTTP) waits.push(getBlob(setKey() + flat[0].id + '-1', 'assets/audio/' + first.file));
     else if (el0) waits.push(new Promise(r => { if (el0.readyState >= 3) r(); else ['canplay', 'loadeddata', 'error'].forEach(ev => el0.addEventListener(ev, r, { once: true })); }));
     const total = waits.length; let done = 0, opened = false;
