@@ -21,6 +21,35 @@
   const blobs = {};
   const getBlob = (key, url) => blobs[key] || (blobs[key] = fetch(url).then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
     .then(b => URL.createObjectURL(b)).catch(() => { delete blobs[key]; return null; }));
+  // 网页版统一用 Web Audio 播放（旁白、背景乐、音效都是解码后的音频数据）：只需在点“开始”的那一下解锁一次，
+  // 之后由同一个引擎按精确时间播放，不受手机浏览器对“多个播放器”“自动播放”的限制。本地打开（file://）仍用普通播放器。
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const WAOK = HTTP && !!AC && !Q.has('nowa');
+  let wctx = null, narrGain = null, silentEl = null;
+  const bufP = {}, bufs = {};
+  function wa() { if (!wctx) { wctx = new AC(); narrGain = wctx.createGain(); narrGain.connect(wctx.destination); } return wctx; }
+  function getBuf(url) {
+    return bufP[url] || (bufP[url] = fetch(url).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+      .then(ab => new Promise((res, rej) => wa().decodeAudioData(ab, res, rej)))
+      .then(b => (bufs[url] = b)).catch(() => { delete bufP[url]; return null; }));
+  }
+  function dropBuf(url) { delete bufP[url]; delete bufs[url]; }
+  function unlockWA() {
+    try {
+      const c = wa(); c.resume();
+      const s0 = c.createBufferSource(); s0.buffer = c.createBuffer(1, 1, 22050); s0.connect(c.destination); s0.start(0);
+      // 苹果手机：静音拨片打开时 Web Audio 默认没有声音。把音频会话设为“播放”，旧系统再用一段循环的静音来保持
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+      if (!silentEl) {
+        const n = 16000, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+        [[0, 0x52494646], [8, 0x57415645], [12, 0x666d7420], [36, 0x64617461]].forEach(([o, x]) => v.setUint32(o, x));
+        v.setUint32(4, 36 + n, true); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
+        v.setUint16(32, 1, true); v.setUint16(34, 8, true); v.setUint32(40, n, true); b.fill(128, 44);
+        silentEl = new Audio(URL.createObjectURL(new Blob([b], { type: 'audio/wav' }))); silentEl.loop = true;
+        const pr = silentEl.play(); if (pr && pr.catch) pr.catch(() => {});
+      }
+    } catch (e) {}
+  }
   // 苹果手机上网页不能改音量（volume 只读），用它来识别
   const VOL_OK = (() => { if (Q.has('wa')) return false; try { const a = new Audio(); a.volume = .5; return a.volume === .5; } catch (e) { return true; } })();
   const PRINT = Q.has('print');
@@ -246,12 +275,23 @@
       if (HTTP) { getBlob('s:' + a._url, a._url).then(b => { if (b && !a._live && a.paused) a.src = b; }); return; }   // 下载到内存，播放时零等待
       a.preload = 'auto'; if (a.readyState === 0 && a.paused) { try { a.load(); } catch (e) {} }
     };
+    const U = file => 'assets/audio/' + file;
     function warm(ci) {
+      if (WAOK) {
+        const keep = new Set([bgmKey]);
+        [ci, ci + 1].forEach(c => { const ch = N.chapters[c], k = ch && CH_BGM[ch.id]; if (k && BG[k]) { keep.add(k); getBuf(U(BG[k].file)); } });
+        Object.keys(BG).forEach(k => { if (!keep.has(k)) dropBuf(U(BG[k].file)); });   // 用不到的曲子释放内存
+        ['curtain', 'projector', 'chapter', 'wind'].forEach(k => FX[k] && getBuf(U(FX[k].file)));
+        return;
+      }
       [ci, ci + 1].forEach(c => { const ch = N.chapters[c], k = ch && CH_BGM[ch.id]; if (k && BG[k]) L(BG[k], 'b' + k).els.forEach(heat); });
       ['curtain', 'projector', 'chapter'].forEach(k => pool[k] && heat(pool[k]));
       if (loopers.swind) loopers.swind.els.forEach(heat);
     }
-    function warmAll() { Object.values(pool).forEach(heat); Object.keys(loopers).filter(k => k[0] === 's').forEach(k => loopers[k].els.forEach(heat)); }
+    function warmAll() {
+      if (WAOK) { Object.values(FX).forEach(d => getBuf(U(d.file))); return; }
+      Object.values(pool).forEach(heat); Object.keys(loopers).filter(k => k[0] === 's').forEach(k => loopers[k].els.forEach(heat));
+    }
     const all = [];
     // 音量：一般浏览器直接设 volume；苹果手机不允许，改走 WebAudio 增益（只在 http/https 下可用），不行就把配乐关掉
     const WA = !VOL_OK && /^http/.test(location.protocol) && (window.AudioContext || window.webkitAudioContext);
@@ -268,6 +308,7 @@
     const getVol = el => VOL_OK ? el.volume : (el._g ? el._g.gain.value : 0);
     // 苹果手机：每个声音都要在用户点击的那一下里播放过一次，之后脚本才能播放它。这里不等加载，点完立即返回。
     function unlockAudio() {
+      if (WAOK) return unlockWA();
       if (VOL_OK) return;
       if (!WA) { level = 'off'; return; }
       try {
@@ -305,7 +346,28 @@
       pause() { this.els.forEach(e => { e._was = !e.paused && !e.ended; e.pause(); }); },
       resume() { this.els.forEach(e => { if (e._was) e.play().catch(() => {}); e._was = false; }); },
     };
-    const L = (def, key) => loopers[key] || (loopers[key] = new Looper(def));
+    // Web Audio 版的循环播放：到循环点时按精确时间叠放下一遍
+    function WLooper(def) { this.def = def; this.url = U(def.file); this.g = { v: 0 }; this.on = false; this.srcs = []; this.gn = null; this.next = 0; this.seq = 0; }
+    WLooper.prototype = {
+      apply() { if (this.gn) this.gn.gain.value = Math.max(0, Math.min(1, this.g.v)); },
+      to(v, fade) { gsap.killTweensOf(this.g); gsap.to(this.g, { v, duration: fade, ease: 'sine.inOut', onUpdate: () => this.apply() }); },
+      spawn(when) {
+        const b = bufs[this.url]; if (!b) return;
+        const src = wctx.createBufferSource(); src.buffer = b; src.connect(this.gn); src.start(when); this.srcs.push(src);
+        src.onended = () => { this.srcs = this.srcs.filter(x => x !== src); };
+      },
+      kill() { this.srcs.forEach(x => { x.onended = null; try { x.stop(); } catch (e) {} }); this.srcs = []; this.next = 0; },
+      start(v, fade) {
+        this.kill(); this.on = true; const seq = ++this.seq;
+        if (!this.gn) { this.gn = wa().createGain(); this.gn.connect(wctx.destination); }
+        this.g.v = 0; this.apply(); this.to(v, fade);
+        getBuf(this.url).then(b => { if (!b || !this.on || seq !== this.seq) return; this.next = wctx.currentTime + .03; this.spawn(this.next); this.next += this.def.loop; });
+      },
+      stop(fade) { this.on = false; this.seq++; gsap.killTweensOf(this.g); gsap.to(this.g, { v: 0, duration: fade, ease: 'sine.inOut', onUpdate: () => this.apply(), onComplete: () => this.kill() }); },
+      tick() { if (this.on && this.next && wctx.currentTime > this.next - 1) { this.spawn(this.next); this.next += this.def.loop; } },
+      pause() {}, resume() {},
+    };
+    const L = (def, key) => loopers[key] || (loopers[key] = WAOK ? new WLooper(def) : new Looper(def));
     const bgmVol = () => (ducked ? DUCK : OPEN) * LV[level];
     const ambVol = k => (FX[k].gain || .25) * LV[level];
     let endCall = null;
@@ -327,6 +389,17 @@
     }
     function fx(name, delay, mul) {
       const d = FX[name]; if (level === 'off' || !d) return;
+      if (WAOK) {
+        const url = U(d.file), vol = Math.min(1, (d.gain || .4) * (mul || 1) * (level === 'low' ? .55 : 1));
+        const play = b => {
+          if (!b || level === 'off' || !wctx) return;
+          const src = wctx.createBufferSource(), g = wctx.createGain(); g.gain.value = vol; src.buffer = b; src.connect(g); g.connect(wctx.destination); src.start();
+          live.add(src); src.onended = () => live.delete(src);
+        };
+        const run = () => { bufs[url] ? play(bufs[url]) : getBuf(url).then(play); };
+        if (delay) pending.push(gsap.delayedCall(delay, run)); else run();
+        return;
+      }
       const fire = () => {
         const a = pool[name] || (pool[name] = mk(d.file));
         try { a.currentTime = 0; } catch (x) {}
@@ -343,7 +416,7 @@
       level = v; try { localStorage.setItem('jy-music', v); } catch (e) {}
       if (v === 'off') {
         if (bgm) bgm.stop(.8); if (amb) amb.stop(.8); bgm = amb = null; bgmKey = ambKey = '';
-        live.forEach(a => a.pause()); live.clear();
+        live.forEach(a => { try { a.stop ? a.stop() : a.pause(); } catch (e) {} }); live.clear();
       } else if (started) {
         if (curCi >= 0) chapter(curCi);
         if (curPage) page(curPage);
@@ -355,11 +428,11 @@
       document.querySelectorAll('#start .msel button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
     }
     const cycle = () => setLevel({ std: 'low', low: 'off', off: 'std' }[level]);
-    function pause() { Object.values(loopers).forEach(l => l.pause()); live.forEach(a => { a._was = !a.paused; a.pause(); }); }
-    function resume() { Object.values(loopers).forEach(l => l.resume()); Object.values(pool).forEach(a => { if (a._was) a.play().catch(() => {}); a._was = false; }); }
-    function preload() { Object.keys(BG).forEach(k => L(BG[k], 'b' + k)); Object.keys(FX).forEach(k => { if (FX[k].loop) L(FX[k], 's' + k); else pool[k] = mk(FX[k].file); }); }
+    function pause() { if (WAOK) return; Object.values(loopers).forEach(l => l.pause()); live.forEach(a => { a._was = !a.paused; a.pause(); }); }
+    function resume() { if (WAOK) return; Object.values(loopers).forEach(l => l.resume()); Object.values(pool).forEach(a => { if (a._was) a.play().catch(() => {}); a._was = false; }); }
+    function preload() { if (WAOK) return; Object.keys(BG).forEach(k => L(BG[k], 'b' + k)); Object.keys(FX).forEach(k => { if (FX[k].loop) L(FX[k], 's' + k); else pool[k] = mk(FX[k].file); }); }
     setInterval(() => { if (bgm) bgm.tick(); if (amb) amb.tick(); }, 30);
-    const first = () => (loopers.ba ? [loopers.ba.els[0]] : []);
+    const first = () => (!WAOK && loopers.ba ? [loopers.ba.els[0]] : []);
     return { chapter, page, step, fx, duck, ending, unlockAudio, first, warm, warmAll, setLevel, cycle, pause, resume, preload, get level() { return level; } };
   })();
 
@@ -383,9 +456,12 @@
   const narr = VOL_OK ? null : new Audio();
   function warmAudio(ci, firstPageOnly) {
     const k = setKey(), set = SETS[k] || {};
+    if (WAOK && !firstPageOnly) flat.filter(f => f.ci < ci).forEach(f => f.segs.forEach((_, n) => { const d = set[`${f.id}-${n + 1}`]; if (d) dropBuf('assets/audio/' + d.file); }));
     (firstPageOnly ? [flat[0]] : flat.filter(f => f.ci >= ci && f.ci <= ci + 1)).forEach(f => f.segs.forEach((_, n) => {
-      const id = `${f.id}-${n + 1}`; if (!set[id] || warmed[k + id]) return; warmed[k + id] = 1;
+      const id = `${f.id}-${n + 1}`; if (!set[id]) return;
       const url = 'assets/audio/' + set[id].file;
+      if (WAOK) { getBuf(url); return; }
+      if (warmed[k + id]) return; warmed[k + id] = 1;
       if (HTTP) { getBlob(k + id, url); return; }
       if (narr) return;
       const a = new Audio(); a.preload = 'auto'; a.src = url; a._src = url; clips[k + id] = a;
@@ -404,6 +480,23 @@
     const begin = () => { if (began || t.dead) return; began = true; onStart && onStart(); };
     const a = setOf()[id], ck = setKey() + id;
     if (!a) { begin(); return sleep(estDur(text), t); }
+    if (WAOK) return new Promise((res, rej) => {
+      const url = 'assets/audio/' + a.file, dur = (a.dur || 3) * 1000;
+      let over = false, rolling = false, src = null;
+      const finish = ok => { if (over) return; over = true; clearInterval(chk); if (src) { src.onended = null; try { src.stop(); } catch (e) {} } ok ? res() : rej(ABORT); };
+      const chk = setInterval(() => { if (t.dead) finish(false); }, 80);
+      // 这段声音拿不到（网络失败或等了 15 秒）：画面和字幕照常走，按时长静音走完
+      const silent = () => { if (over || rolling) return; rolling = true; begin(); sleep(dur, t).then(() => finish(true), () => finish(false)); };
+      Promise.race([getBuf(url), sleep(15000, t).then(() => null, () => null)]).then(buf => {
+        if (over || t.dead) return;
+        if (!buf || !wctx) return silent();
+        rolling = true;
+        src = wctx.createBufferSource(); src.buffer = buf; src.connect(narrGain); narrGain.gain.value = voice === 'off' ? 0 : 1;
+        src.onended = () => finish(true);
+        src.start(); begin();   // 声音和画面、字幕在同一时刻开始
+        sleep(buf.duration * 1000 + 1500, t).then(() => finish(true), () => {});
+      });
+    });
     return new Promise((res, rej) => {
       const url = 'assets/audio/' + a.file, dur = (a.dur || 3) * 1000;
       let el = null, over = false, rolling = false;
@@ -533,7 +626,7 @@
     if (v !== 'off' && !SETS[v]) return;
     voice = v; try { localStorage.setItem('jy-voice2', v); } catch (e) {}
     if (!PRINT && !PEEK) warmAudio(cur >= 0 ? flat[cur].ci : 0);
-    audio.muted = v === 'off';
+    audio.muted = v === 'off'; if (narrGain) narrGain.gain.value = v === 'off' ? 0 : 1;
     const name = { f: '女声', m: '男声', off: '关闭' }[v];
     const b = document.getElementById('bVoice'); if (b) { b.textContent = '旁白：' + name; b.classList.toggle('on', v !== 'off'); }
     document.querySelectorAll('#start .vsel button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
@@ -565,6 +658,7 @@
   function togglePause() {
     if (!started) return;
     paused = !paused;
+    if (WAOK && wctx) { try { paused ? wctx.suspend() : wctx.resume(); } catch (e) {} }
     if (paused) { audio.pause(); Sound.pause(); gsap.globalTimeline.pause(); } else { if (audio.src && !audio.ended) audio.play().catch(() => {}); Sound.resume(); gsap.globalTimeline.resume(); }
     setPausedUI();
   }
@@ -588,7 +682,7 @@
       trickle();   // 其余图片在后台按页码顺序继续加载
     };
     // 苹果手机：先在这次点击里把声音都解锁，再开始
-    if (!VOL_OK) { Sound.unlockAudio(); unlockNarr(); }
+    Sound.unlockAudio(); if (!WAOK && !VOL_OK) unlockNarr();
     run();
   }
 
@@ -597,7 +691,7 @@
     const d = document.createElement('div');
     d.className = 'ch'; d.dataset.ci = ci;
     d.innerHTML = `<div class="bar"><i></i></div>${ch.no ? ch.no + ' ' : ''}${ch.title}`;
-    d.onclick = () => { if (!gateOpen) return; if (!started) { if (!VOL_OK) { Sound.unlockAudio(); unlockNarr(); } trickle(); } started = true; document.getElementById('start').style.display = 'none'; playFrom(chStart(ci)); };
+    d.onclick = () => { if (!gateOpen) return; if (!started) { Sound.unlockAudio(); if (!WAOK && !VOL_OK) unlockNarr(); trickle(); } started = true; document.getElementById('start').style.display = 'none'; playFrom(chStart(ci)); };
     ui.chapters.appendChild(d);
   });
   function updateBar() {
@@ -670,7 +764,8 @@
     const imgs = [...flat[0].el.querySelectorAll('img')];
     const first = setOf()[flat[0].id + '-1'], el0 = clips[setKey() + flat[0].id + '-1'];
     const waits = imgs.map(im => new Promise(r => { if (im.complete) r(); else { im.addEventListener('load', r, { once: true }); im.addEventListener('error', r, { once: true }); } }));
-    if (first && HTTP) waits.push(getBlob(setKey() + flat[0].id + '-1', 'assets/audio/' + first.file));
+    if (first && WAOK) waits.push(getBuf('assets/audio/' + first.file));
+    else if (first && HTTP) waits.push(getBlob(setKey() + flat[0].id + '-1', 'assets/audio/' + first.file));
     else if (el0) waits.push(new Promise(r => { if (el0.readyState >= 3) r(); else ['canplay', 'loadeddata', 'error'].forEach(ev => el0.addEventListener(ev, r, { once: true })); }));
     const total = waits.length; let done = 0, opened = false;
     const open = () => { if (opened) return; opened = true; gateOpen = true; btns.classList.remove('wait'); if (ld) ld.textContent = ''; warmAudio(0); warmPages(0); };
@@ -731,5 +826,5 @@
     window.__READY__ = true;
   }
   boot();
-  window.APP = { playFrom, flat, next, prev, setVoice, start, Sound, toggleFull };
+  window.APP = { playFrom, flat, next, prev, setVoice, start, Sound, toggleFull, get wa() { return { ok: WAOK, state: wctx && wctx.state, time: wctx && wctx.currentTime, bufs: Object.keys(bufs).length }; } };
 })();
