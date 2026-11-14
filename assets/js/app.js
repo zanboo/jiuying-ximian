@@ -794,14 +794,23 @@
   document.querySelectorAll('#bDl, #dl, #endbar').forEach(e => e.remove());
   const endbar = document.createElement('div'); endbar.id = 'endbar';
   endbar.innerHTML = `<div class="dlw" id="dlw"><div class="dl-menu">
-      <a id="dlVideo" href="downloads/video-male-hd.mp4" download="玖影喜面-商业汇报-男声高清.mp4" target="_blank">视频<small>男声 · 1080p 高清</small></a>
-      <a id="dlPdf" href="downloads/report-a4.pdf" download="玖影喜面-商业汇报-A4横版.pdf" target="_blank">文档<small>PDF · A4 横版 23 页</small></a>
+      <a id="dlVideo" href="downloads/video-male-hd.mp4" download="玖影喜面-商业汇报-男声高清.mp4" target="_blank">视频<small>MP4 · 1080p 高清 · 93MB</small></a>
+      <a id="dlPdf" href="downloads/report-a4.pdf" download="玖影喜面-商业汇报-A4横版.pdf" target="_blank">文档<small>PDF · 23 页 · 19MB</small></a>
     </div><button id="bDl">资料下载</button></div><button id="bRe">重新讲解 ↺</button>`;
   document.body.appendChild(endbar);
   const dlw = endbar.querySelector('.dlw');
-  endbar.querySelector('#bDl').onclick = e => { e.stopPropagation(); dlw.classList.toggle('open'); };
+  // 触屏上同时监听“手指抬起”和“点击”，并防止一次触摸被算成两次（否则会出现要点两下才展开）
+  let lastTog = 0;
+  const togDl = e => { e.preventDefault(); e.stopPropagation(); const now = Date.now(); if (now - lastTog < 450) return; lastTog = now; dlw.classList.toggle('open'); };
+  const bDlBtn = endbar.querySelector('#bDl');
+  bDlBtn.addEventListener('touchend', togDl, { passive: false }); bDlBtn.addEventListener('click', togDl);
   endbar.querySelector('#bRe').onclick = () => next();
-  addEventListener('click', e => { if (!dlw.contains(e.target)) dlw.classList.remove('open'); });
+  addEventListener('click', e => { if (!dlw.contains(e.target) && Date.now() - lastTog > 450) dlw.classList.remove('open'); });
+  // 微信内置的下载器很慢，也不显示文件名：点下载项时提示改用浏览器
+  const WX = /MicroMessenger/i.test(navigator.userAgent);
+  endbar.querySelectorAll('.dl-menu a').forEach(a => a.addEventListener('click', () => {
+    if (WX) toast('微信里下载比较慢，也不显示文件名。建议点右上角“…”→“在浏览器打开”，再到这里下载。');
+  }));
   // 高清视频约 93MB，超过 Cloudflare 单文件 25MB 的上限，所以网页版统一从 GitHub 那份下载
   if (HTTP && !/github\.io$/.test(location.hostname)) endbar.querySelector('#dlVideo').href = 'https://zanboo.github.io/jiuying-ximian/downloads/video-male-hd.mp4';
   addEventListener('keydown', e => {
@@ -815,6 +824,22 @@
     else if (e.code === 'KeyM') Sound.cycle();
     else if (e.code === 'KeyF') document.getElementById('bFull').click();
   });
+  // 横屏提示：由脚本按实际宽高判断（微信从下载、预览界面返回后，系统上报的方向常常不更新，纯样式判断会卡住），点一下也能关掉
+  const rot = document.getElementById('rotate');
+  let rotOff = false, lastWH = '';
+  function checkRot() {
+    const wh = innerWidth + 'x' + innerHeight;
+    if (wh !== lastWH) { lastWH = wh; fit(); }
+    if (rot) rot.style.display = (!PRINT && !rotOff && innerHeight > innerWidth && innerWidth <= 820) ? 'flex' : 'none';
+  }
+  if (rot) rot.addEventListener('click', () => { rotOff = true; checkRot(); });
+  // 页面回到前台（比如从微信的下载界面返回）时，声音引擎可能被系统挂起，这里把它叫醒
+  function wakeAudio() { if (WAOK && wctx && !paused && wctx.state !== 'running') { try { wctx.resume(); } catch (e) {} } }
+  ['resize', 'orientationchange', 'pageshow', 'focus'].forEach(ev => addEventListener(ev, () => { setTimeout(checkRot, 80); setTimeout(checkRot, 600); wakeAudio(); }));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { setTimeout(checkRot, 80); wakeAudio(); } });
+  addEventListener('touchend', wakeAudio, { passive: true });
+  setInterval(checkRot, 1000); checkRot();
+
   let idleT;
   const wake = () => {
     document.body.classList.remove('idle'); clearTimeout(idleT);
