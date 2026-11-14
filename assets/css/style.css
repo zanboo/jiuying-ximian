@@ -365,3 +365,30 @@ body.print #dl { display: none !important; }
 #toast { position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 400; max-width: min(560px, 86vw); padding: 12px 18px; font-size: 13.5px; line-height: 1.7;
   color: #fff; background: rgba(20,16,13,.94); border: 1px solid var(--gold); border-radius: 6px; opacity: 0; pointer-events: none; transition: opacity .4s; }
 #toast.on { opacity: 1; }
+
+
+/* —— 结束后的按钮组：资料下载 / 重新讲解（样式与“下一章”提示一致，位于右下角、控制条上方） —— */
+#endbar { position: fixed; right: 26px; bottom: 74px; z-index: 101; display: none; gap: 12px; align-items: flex-end; }
+#endbar.on { display: flex; }
+#endbar button, #endbar .dl-menu a { display: block; padding: 12px 20px; background: var(--accent); color: #fff; font: inherit; font-size: 15px; letter-spacing: .1em; border: none; border-radius: 4px;
+  cursor: pointer; box-shadow: 0 8px 30px rgba(232,98,44,.4); text-decoration: none; white-space: nowrap; }
+#endbar #bRe { animation: pulse 1.6s infinite; }
+#endbar button:hover, #endbar .dl-menu a:hover { background: var(--accent2); }
+#endbar .dlw { position: relative; }
+#endbar .dl-menu { position: absolute; right: 0; bottom: calc(100% + 10px); display: none; flex-direction: column; gap: 8px; align-items: stretch; }
+#endbar .dlw.open .dl-menu { display: flex; }
+#endbar .dl-menu a small { margin-left: 10px; font-size: 11.5px; letter-spacing: .04em; opacity: .85; }
+body.print #endbar, body.print #gallery { display: none !important; }
+
+/* —— 结束后的效果图轮播 —— */
+#gallery { position: absolute; inset: 0; z-index: 35; visibility: hidden; opacity: 0; background: #0c0a09; overflow: hidden; }
+#gallery .g-img { position: absolute; inset: 0; opacity: 0; }
+#gallery .g-img img { width: 100%; height: 100%; object-fit: cover; }
+#gallery .g-shade { position: absolute; inset: 0; background: linear-gradient(28deg, rgba(10,8,7,.86) 0%, rgba(10,8,7,.5) 24%, rgba(10,8,7,0) 52%), linear-gradient(180deg, rgba(10,8,7,.3), rgba(10,8,7,0) 16%); }
+#gallery .g-txt { position: absolute; left: 56px; bottom: 92px; max-width: 560px; }
+#gallery .g-no { font-size: 11px; letter-spacing: .34em; color: var(--gold); }
+#gallery .g-t { font-family: var(--serif); font-size: 36px; font-weight: 800; letter-spacing: .06em; line-height: 1.25; margin-top: 8px; text-shadow: 0 4px 24px rgba(0,0,0,.6); }
+#gallery .g-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+#gallery .g-meta span { font-size: 12.5px; letter-spacing: .06em; padding: 4px 11px; border: 1px solid rgba(241,231,214,.3); background: rgba(18,15,13,.55); }
+#gallery .g-meta span b { font-family: var(--serif); color: var(--accent2); margin-right: 8px; font-weight: 700; }
+#gallery .g-hl { font-size: 14px; line-height: 1.7; color: var(--ink); margin-top: 11px; text-shadow: 0 1px 8px rgba(0,0,0,.85); }

@@ -96,7 +96,7 @@
     window.S3D && S3D.setScale(scale, SW);
     // 画布外的界面（开场页、控制条、下一章提示）跟着屏幕大小放大，大屏上不至于太小
     const z = Math.max(1, scale * .92);
-    const zs = { start: Math.min(z, innerHeight / 640, innerWidth / 720), dl: Math.min(z, innerHeight / 560, innerWidth / 520), ui: Math.min(z, Math.max(.55, innerWidth / 1180)), hint: Math.min(z, Math.max(.7, innerWidth / 1180)) };
+    const zs = { start: Math.min(z, innerHeight / 640, innerWidth / 720), endbar: Math.min(z, Math.max(.7, innerWidth / 1180)), ui: Math.min(z, Math.max(.55, innerWidth / 1180)), hint: Math.min(z, Math.max(.7, innerWidth / 1180)) };
     Object.keys(zs).forEach(id => { const e = document.getElementById(id); if (e) e.style.zoom = zs[id]; });
   }
   addEventListener('resize', fit);
@@ -572,7 +572,7 @@
     if (tok) tok.dead = true;
     const t = tok = { dead: false };
     audio.pause(); paused = false; setPausedUI();
-    hideHint();
+    hideHint(); Gallery.hide();
     try {
       for (let i = idx; i < total; i++) {
         const f = flat[i];
@@ -594,8 +594,11 @@
         await sleep(900, t);
       }
       pr.run = false; pr.el = pr.tot;
-      Sound.ending();
+      Sound.duck(false);                 // 背景乐不停，回到标准音量
       showHint(-2);
+      await sleep(5000, t);
+      await Gallery.run(t);              // 效果图轮播一遍
+      playFrom(0);                       // 然后自动重新讲解
     } catch (e) { if (e !== ABORT) console.error(e); }
   }
 
@@ -632,13 +635,64 @@
     document.querySelectorAll('#start .vsel button').forEach(x => x.classList.toggle('on', x.dataset.v === v));
   }
 
+  // ---------- 结束后的效果图轮播 ----------
+  // 每张：缓慢推移的画面 + 左下角一小块文字（标题、功能、面积或规模、设计亮点）。数字都来自 CAD 与业主确认的口径。
+  const GAL = [
+    { img: 'r01', t: '外立面 · 点亮文明路的夜色', m: [['功能', '主入口 · 城市形象'], ['尺度', '面宽 31.1 米']], h: '保留原有门头框架与大台阶 · 橙色门框 · “郊区影剧院”灯牌' },
+    { img: 'r06', t: '入口前室 · 走进影像年代', m: [['功能', '入口与出口分设 · 单向客流']], h: '顶棚布满复古显像管电视，第一眼就回到影像年代' },
+    { img: 'r03', t: '前厅 · 主打卡位', m: [['功能', '集散 · 打卡 · 展陈']], h: '巨型熊猫与动漫主题墙，最具传播力的拍照点' },
+    { img: 'r02', t: '老放映机展区', m: [['功能', '影像记忆展陈']], h: '老放映机与动漫头像墙，新旧影像在这里对话' },
+    { img: 'r04', t: '独立书吧', m: [['功能', '阅读 · 休憩'], ['面积', '约 70 ㎡']], h: '书墙、绿树与沙发，营造安静的阅读角落' },
+    { img: 'r05', t: '文创展览区', m: [['功能', '动漫周边 · 城市文创']], h: '让等候与停留也有内容' },
+    { img: 'r10', t: '美食大厅 · 城市客厅', m: [['功能', '就餐大厅'], ['规模', '一层 204 座 · 主厅宽 22.6 米']], h: '红砖墙、钢结构回廊与暖色灯光 · 观光电梯直达二层' },
+    { img: 'r09', t: '明档档口街', m: [['功能', '6 个开放式明档'], ['面积', '约 140 ㎡']], h: '面食 · 中餐融合 · 酒水咖啡 · 西点面点，透明可视，烟火气十足' },
+    { img: 'r11', t: '茶饮咖啡 · 面馆', m: [['功能', '全时段餐饮'], ['产品', '200+ 产品单元']], h: '早餐、午餐、下午茶、晚餐、夜宵，五个时段都有人来' },
+    { img: 'r08', t: '大厅北区 · 多元桌型', m: [['功能', '散台 · 聚餐 · 轻商务宴请']], h: '四人桌、圆桌、长桌与卡座组合 —— 既有面子，又有里子' },
+    { img: 'r12', t: '综艺舞台 · 超清巨幕', m: [['功能', '演艺 · 观影 · 主题活动'], ['尺度', '舞台约 65 ㎡ · 巨幕约 12 米']], h: '白天放映经典电影 · 每晚演艺表演 · 周五六日大型演艺' },
+    { img: 'r07', t: '二层看台 · 视野最好的位置', m: [['功能', '看台餐饮 · VR 娱乐'], ['规模', '二层 132 座 · VR 区约 430 ㎡']], h: '18 组阶梯卡座，正对舞台与巨幕' },
+  ];
+  const Gallery = (() => {
+    const box = document.getElementById('gallery');
+    if (!box) return { run: async () => {}, hide() {} };
+    const layers = [...box.querySelectorAll('.g-img')], txt = box.querySelector('.g-txt');
+    const SEC = +(Q.get('gsec') || 8);   // 每张停留秒数
+    const src = d => `assets/img/${d.img}.jpg`;
+    const pre = u => new Promise(r => { const im = new Image(); im.onload = im.onerror = () => r(); im.src = u; });
+    let k = 0, shown = false;
+    function show(i) {
+      const d = GAL[i]; k = 1 - k;
+      const L = layers[k], old = layers[1 - k], im = L.querySelector('img'), dx = (i % 2 ? -1 : 1) * 1.5;
+      im.src = src(d);
+      gsap.killTweensOf([im, L, old, txt, ...txt.children]);
+      gsap.fromTo(im, { scale: 1.05, xPercent: -dx, yPercent: .6 }, { scale: 1.14, xPercent: dx, yPercent: -.6, duration: SEC + 3, ease: 'none' });
+      gsap.to(L, { opacity: 1, duration: 1.6, ease: 'sine.inOut' }); gsap.to(old, { opacity: 0, duration: 1.6, ease: 'sine.inOut' });
+      gsap.to(txt, { autoAlpha: 0, duration: .45, onComplete() {
+        txt.querySelector('.g-no').textContent = `效果图 ${String(i + 1).padStart(2, '0')} / ${String(GAL.length).padStart(2, '0')}`;
+        txt.querySelector('.g-t').textContent = d.t;
+        txt.querySelector('.g-meta').innerHTML = d.m.map(x => `<span><b>${x[0]}</b>${x[1]}</span>`).join('');
+        txt.querySelector('.g-hl').textContent = d.h;
+        gsap.set(txt, { autoAlpha: 1 });
+        gsap.fromTo(txt.children, { autoAlpha: 0, y: 16 }, { autoAlpha: 1, y: 0, duration: .8, stagger: .16, delay: .5, ease: 'power3.out' });
+      } });
+    }
+    async function run(t) {
+      await pre(src(GAL[0]));
+      if (t.dead) throw ABORT;
+      layers.forEach(l => gsap.set(l, { opacity: 0 })); gsap.set(txt, { autoAlpha: 0 });
+      shown = true; gsap.killTweensOf(box); gsap.to(box, { autoAlpha: 1, duration: 1.4, ease: 'sine.inOut' });
+      for (let i = 0; i < GAL.length; i++) { pre(src(GAL[(i + 1) % GAL.length])); show(i); await sleep(SEC * 1000, t); }
+    }
+    function hide() { if (!shown) return; shown = false; gsap.killTweensOf(box); gsap.to(box, { autoAlpha: 0, duration: .9, ease: 'sine.inOut' }); }
+    return { run, hide };
+  })();
+
   function showHint(nextIdx) {
     waitingNext = nextIdx;
-    if (nextIdx === -2) { ui.hint.textContent = '汇报结束 · 重新开始 ↺'; }
-    else ui.hint.textContent = `下一章：${flat[nextIdx].ch.title} ▶`;
+    if (nextIdx === -2) { ui.hint.style.display = 'none'; endbar.classList.add('on'); return; }   // 全部讲完：右下角出现“资料下载 / 重新讲解”
+    ui.hint.textContent = `下一章：${flat[nextIdx].ch.title} ▶`;
     ui.hint.style.display = 'block';
   }
-  function hideHint() { waitingNext = -1; ui.hint.style.display = 'none'; }
+  function hideHint() { waitingNext = -1; ui.hint.style.display = 'none'; endbar.classList.remove('on'); dlw.classList.remove('open'); }
 
   function next() {
     if (!started) return start('auto');   // 默认自动讲解
@@ -732,14 +786,15 @@
   Sound.setLevel(Sound.level);
   document.getElementById('sManual').onclick = () => start('manual');
   document.getElementById('sAuto').onclick = () => start('auto');
-  // 下载资料
-  const dl = document.getElementById('dl');
-  const dlShow = on => { dl.classList.toggle('on', on); };
-  document.getElementById('bDl').onclick = () => dlShow(true);
-  document.getElementById('dlClose').onclick = () => dlShow(false);
-  dl.onclick = e => { if (e.target === dl) dlShow(false); };
+  // 结束后的按钮组：资料下载（展开“视频 / 文档”）和重新讲解
+  const endbar = document.getElementById('endbar'), dlw = document.getElementById('dlw');
+  document.getElementById('bDl').onclick = e => { e.stopPropagation(); dlw.classList.toggle('open'); };
+  document.getElementById('bRe').onclick = () => next();
+  addEventListener('click', e => { if (!dlw.contains(e.target)) dlw.classList.remove('open'); });
+  // 高清视频约 93MB，超过 Cloudflare 单文件 25MB 的上限，所以网页版统一从 GitHub 那份下载
+  if (HTTP && !/github\.io$/.test(location.hostname)) document.getElementById('dlVideo').href = 'https://zanboo.github.io/jiuying-ximian/downloads/video-male-hd.mp4';
   addEventListener('keydown', e => {
-    if (dl.classList.contains('on')) { if (e.code === 'Escape') dlShow(false); return; }
+    if (e.code === 'Escape') { dlw.classList.remove('open'); return; }
     if (['Space', 'ArrowRight', 'PageDown', 'Enter'].includes(e.code)) { e.preventDefault(); next(); }
     else if (['ArrowLeft', 'PageUp'].includes(e.code)) { e.preventDefault(); prev(); }
     else if (e.code === 'KeyP') togglePause();

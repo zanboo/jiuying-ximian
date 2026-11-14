@@ -489,10 +489,14 @@
       <div data-logo style="width:290px;margin:0 auto"></div>
       <div style="margin-top:16px;font-size:13px;letter-spacing:.5em;color:var(--muted)">九原饭店餐饮管理公司 &nbsp;·&nbsp; 谢谢</div>
     </div>
-    <button class="dl-btn" id="bDl" style="top:538px" data-step="3" data-anim="fade" data-delay="3.2">下载资料</button>
   </div>
 </section>
 
+<div id="gallery">
+  <div class="g-img"><img alt=""></div><div class="g-img"><img alt=""></div>
+  <div class="g-shade"></div>
+  <div class="g-txt"><div class="g-no"></div><div class="g-t"></div><div class="g-meta"></div><div class="g-hl"></div></div>
+</div>
 <div id="chapterCard"><div class="no"></div><div class="tt"></div><div class="ln"></div></div>
 <div id="caption"></div>
 <div id="prog"><span class="pn"></span><i><b></b></i><span class="pt"></span></div>
@@ -513,15 +517,16 @@
   <button id="bFull" title="全屏（F）">全屏</button>
 </div>
 <div id="hint">下一章 ▶</div>
-<div id="dl"><div class="dl-box">
-  <div class="dl-t">下载资料</div>
-  <a href="downloads/report-a4.pdf" download="玖影喜面-商业汇报-A4横版.pdf" target="_blank"><b>汇报 PDF</b><span>A4 横版 · 23 页 · 19 MB</span></a>
-  <a href="downloads/narration-script.pdf" download="玖影喜面-旁白稿.pdf" target="_blank"><b>旁白稿 PDF</b><span>A4 竖版 · 7 页 · 1.4 MB</span></a>
-  <a href="downloads/video-male.mp4" download="玖影喜面-商业汇报-男声.mp4" target="_blank"><b>汇报视频 · 男声</b><span>9 分 21 秒 · 540p · 24 MB</span></a>
-  <a href="downloads/video-female.mp4" download="玖影喜面-商业汇报-女声.mp4" target="_blank"><b>汇报视频 · 女声</b><span>9 分 24 秒 · 540p · 24 MB</span></a>
-  <div class="dl-n">在微信里如果点了没有反应，请点右上角“…”选择“在浏览器打开”后再下载。</div>
-  <button id="dlClose">关闭</button>
-</div></div>
+<div id="endbar">
+  <div class="dlw" id="dlw">
+    <div class="dl-menu">
+      <a id="dlVideo" href="downloads/video-male-hd.mp4" download="玖影喜面-商业汇报-男声高清.mp4" target="_blank">视频<small>男声 · 1080p 高清</small></a>
+      <a id="dlPdf" href="downloads/report-a4.pdf" download="玖影喜面-商业汇报-A4横版.pdf" target="_blank">文档<small>PDF · A4 横版 23 页</small></a>
+    </div>
+    <button id="bDl">资料下载</button>
+  </div>
+  <button id="bRe">重新讲解 ↺</button>
+</div>
 <div id="toast"></div>
 <div id="rotate"><div class="ph-ico"></div><div>请把手机横过来观看</div><small>横屏后点“开始汇报”，建议打开声音</small></div>
 <div id="start">
